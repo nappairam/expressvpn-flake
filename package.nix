@@ -23,6 +23,14 @@
   procps,
   psmisc,
   util-linux,
+  # --- Overridable installer source ---
+  # Defaults to the public v14.1 release downloaded over HTTPS. Override
+  # `version` to pin a different upstream tag (used in default URL + pname);
+  version ? "14.1.1.13156",
+  installer ? fetchurl {
+    url = "https://www.expressvpn.works/clients/linux/expressvpn-linux-universal-${version}_release.run";
+    hash = "sha256-A25OPFtQ5ymy9R45c/beMvxLT0Sp+7ufkWRVarJpRRc=";
+  },
   # autoPatchelf inputs (NEEDED libs the bundle doesn't ship)
   stdenv,
   glib,
@@ -64,8 +72,6 @@
 }:
 
 let
-  version = "14.1.1.13156";
-
   archDir =
     if stdenvNoCC.hostPlatform.isx86_64 then
       "x64"
@@ -77,11 +83,7 @@ in
 stdenvNoCC.mkDerivation {
   pname = "expressvpn";
   inherit version;
-
-  src = fetchurl {
-    url = "https://www.expressvpn.works/clients/linux/expressvpn-linux-universal-${version}_release.run";
-    hash = "sha256-A25OPFtQ5ymy9R45c/beMvxLT0Sp+7ufkWRVarJpRRc=";
-  };
+  src = installer;
 
   nativeBuildInputs = [
     autoPatchelfHook

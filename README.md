@@ -6,7 +6,6 @@ Built from the upstream universal `.run` installer (auto-extracted via `autoPatc
 
 ## Status
 
-- Default build: **v14.1.1.13156** (public release, fetched from `expressvpn.works`)
 - Tested on NixOS unstable, x86_64-linux
 - `aarch64-linux` declared in `meta.platforms` but untested
 - Unfree (proprietary upstream)
@@ -75,7 +74,7 @@ NixOS has none of those paths. Without the patches in `package.nix` +
 
 See inline comments in `package.nix` / `module.nix` for each fix's rationale.
 
-## Bumping the version
+## Bumping the version (default public release)
 
 1. Find the new release URL on `expressvpn.works/clients/linux/`
 2. Update `version` in `package.nix`
@@ -83,6 +82,35 @@ See inline comments in `package.nix` / `module.nix` for each fix's rationale.
 4. Update `hash` in `package.nix` (use `sha256-...` SRI format)
 5. Build - autoPatchelf may need additional `buildInputs` if upstream adds new
    bundled libs (read the build failure)
+
+## Custom installer
+
+The package exposes `version` and `installer` as overridable arguments. To
+build a specific installer that isn't on the public CDN, stage the `.run`
+locally and pass `requireFile` as `installer`:
+
+```bash
+# 1. Drop the installer somewhere and prefetch into the store:
+nix store prefetch-file "file:///absolute/path/to/expressvpn-linux-universal-14.2.0.xxxxx.run"
+```
+
+```nix
+# 2. In your NixOS config, override the package:
+services.expressvpn = {
+  enable = true;
+  package = pkgs.expressvpn.override {
+    version = "14.2.0.XXXXX";
+    installer = pkgs.requireFile {
+      name = "expressvpn-linux-universal-14.2.0.xxxxxx.run";
+      hash = "sha256-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+      message = ''
+        Stage the ExpressVPN installer before building:
+          nix store prefetch-file "file:///path/to/the.run"
+      '';
+    };
+  };
+};
+```
 
 ## License
 
