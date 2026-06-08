@@ -75,6 +75,8 @@ in
         allowSrcs = [
           "100.64.100.1"
           "100.64.100.5"
+          "100.64.0.1"
+          "100.64.0.5"
         ];
         insertRule = src: ''
           ${ipts} -C ts-input -s ${src} -i tun0 -j RETURN 2>/dev/null \
