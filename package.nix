@@ -26,10 +26,10 @@
   # --- Overridable installer source ---
   # Defaults to the public v14.1 release downloaded over HTTPS. Override
   # `version` to pin a different upstream tag (used in default URL + pname);
-  version ? "14.1.1.13156",
+  version ? "14.2.0.13635",
   installer ? fetchurl {
     url = "https://www.expressvpn.works/clients/linux/expressvpn-linux-universal-${version}_release.run";
-    hash = "sha256-A25OPFtQ5ymy9R45c/beMvxLT0Sp+7ufkWRVarJpRRc=";
+    hash = "sha256-4V6tDr9LIlC8b3KxIjT9WWcOzeNhim5eDKOv72umCKQ=";
   },
   # autoPatchelf inputs (NEEDED libs the bundle doesn't ship)
   stdenv,
@@ -70,6 +70,7 @@
   libx11,
   libxcb,
 }:
+
 
 let
   archDir =
