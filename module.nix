@@ -143,10 +143,32 @@ in
       # needs to talk to the daemon (the socket itself is srwxrwxrwx).
       "d  ${installDir}/etc     0755 root expressvpn - -"
       "d  ${installDir}/var     0755 root expressvpn - -"
+      # Split tunneling: daemon expects /opt/expressvpn/etc/cgroup/net_cls to
+      # be a cgroup-v1 net_cls mount-point. systemd.mounts (below) does the
+      # actual mount; tmpfiles just ensures the parent dir exists.
+      "d  ${installDir}/etc/cgroup           0755 root root - -"
+      "d  ${installDir}/etc/cgroup/net_cls   0755 root root - -"
       # Daemon invokes helper commands via `/bin/bash -c "..."` (newexec.cpp);
       # NixOS only ships `/bin/sh`, so without this symlink every iptables/ip
       # rule application aborts with "code: 2 No such file or directory".
       "L+ /bin/bash             -    -    -         - ${pkgs.bash}/bin/bash"
+    ];
+
+    # Split tunneling needs the legacy cgroup-v1 `net_cls` controller. NixOS
+    # boots cgroup-v2 unified, so net_cls isn't mounted anywhere - daemon's
+    # GUI then reports split tunneling as unsupported. Mount it as a named v1
+    # hierarchy at the path the daemon hardcodes. The kernel still ships the
+    # controller (CONFIG_CGROUP_NET_CLASSID=y) even under unified v2.
+    systemd.mounts = [
+      {
+        # `mount -t cgroup -o net_cls none /opt/expressvpn/etc/cgroup/net_cls`
+        what = "none";
+        where = "${installDir}/etc/cgroup/net_cls";
+        type = "cgroup";
+        options = "net_cls";
+        before = [ "expressvpn.service" ];
+        requiredBy = [ "expressvpn.service" ];
+      }
     ];
 
     # Match upstream wgexpressvpn.conf - keep NetworkManager off the wireguard ifaces

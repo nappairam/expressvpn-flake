@@ -185,6 +185,15 @@ stdenvNoCC.mkDerivation {
     sed -i 's|/usr/bin/zip\x00|zip\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00|g' \
       $out/expressvpn/bin/expressvpn-support-tool
 
+    # Split tunneling: the daemon dlopens libnl-3.so.200, libnl-route-3.so.200
+    # and libnl-genl-3.so.200 by soname (no path). Bundle does not ship them
+    # and NixOS has no ld.so.cache, so the dlopens fail and the GUI reports
+    # split tunneling as unsupported. Symlink them next to the bundled libs
+    # so the daemon's RUNPATH/LD_LIBRARY_PATH=/opt/expressvpn/lib finds them.
+    for soname in libnl-3.so.200 libnl-route-3.so.200 libnl-genl-3.so.200; do
+      ln -s ${libnl.out}/lib/$soname $out/expressvpn/lib/$soname
+    done
+
     ln -s $out/expressvpn/bin/expressvpnctl $out/bin/expressvpnctl
 
     # Wrap expressvpn-client. The app's own argv parser swallows everything ahead of
