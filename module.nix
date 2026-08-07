@@ -109,6 +109,18 @@ in
     # VPN tunnel even though daemon's killswitch chain already gates outbound.
     networking.firewall.trustedInterfaces = [ "tun0" ];
 
+    # WireGuard routes via a wg-quick-style catch-all rule
+    # (`not fwmark 0x3213 lookup evpnWgrt` -> default dev wgexpressvpn0)
+    # instead of a host route to the endpoint, so with the strict
+    # `fib saddr . mark . iif` check the encrypted replies arriving on the
+    # physical interface resolve to the wrong iif and get dropped - the
+    # handshake works (finishes before the rule is installed), then the
+    # tunnel goes one-way. OpenVPN/Lightway are unaffected (they add a /32
+    # to the server via the physical gateway). Loose mode only requires
+    # *some* route back to the source, the standard setting for
+    # policy-routed VPNs.
+    networking.firewall.checkReversePath = lib.mkDefault "loose";
+
     # Tailscale's `ts-input` chain drops every packet sourced from
     # 100.64.0.0/10 that arrives on a non-tailscale0 interface (anti-CGNAT-
     # spoof guard). ExpressVPN's tun0 hands out 100.64.100.0/24, so DNS
@@ -122,20 +134,34 @@ in
       let
         ipts = "${pkgs.iptables}/bin/iptables";
         # VPN-internal IPs that tailscale's CGNAT guard would otherwise
-        # drop. .1 is the daemon-pushed DNS server, .5 is the tun0 peer.
+        # drop. .1 is the daemon-pushed DNS server, .5 is the tunnel peer.
         allowSrcs = [
           "100.64.100.1"
           "100.64.100.5"
           "100.64.0.1"
           "100.64.0.5"
         ];
-        insertRule = src: ''
-          ${ipts} -C ts-input -s ${src} -i tun0 -j RETURN 2>/dev/null \
-            || ${ipts} -I ts-input 1 -s ${src} -i tun0 -j RETURN
-        '';
-        deleteRule = src: ''
-          ${ipts} -D ts-input -s ${src} -i tun0 -j RETURN 2>/dev/null || true
-        '';
+        # tun0 = OpenVPN/Lightway, wgexpressvpn0 = WireGuard. DNS replies
+        # (src 100.64.100.1) arrive on whichever tunnel is active.
+        vpnIfaces = [
+          "tun0"
+          "wgexpressvpn0"
+        ];
+        pairs = lib.cartesianProduct {
+          src = allowSrcs;
+          iface = vpnIfaces;
+        };
+        insertRule =
+          { src, iface }:
+          ''
+            ${ipts} -C ts-input -s ${src} -i ${iface} -j RETURN 2>/dev/null \
+              || ${ipts} -I ts-input 1 -s ${src} -i ${iface} -j RETURN
+          '';
+        deleteRule =
+          { src, iface }:
+          ''
+            ${ipts} -D ts-input -s ${src} -i ${iface} -j RETURN 2>/dev/null || true
+          '';
       in
       {
         description = "Re-insert tailscale ts-input bypass for ExpressVPN tunnel IPs";
@@ -159,10 +185,10 @@ in
               ${ipts} -S ts-input >/dev/null 2>&1 && break
               sleep 1
             done
-            ${lib.concatMapStringsSep "\n" insertRule allowSrcs}
+            ${lib.concatMapStringsSep "\n" insertRule pairs}
           '';
           ExecStop = pkgs.writeShellScript "expressvpn-tailscale-bypass-stop" ''
-            ${lib.concatMapStringsSep "\n" deleteRule allowSrcs}
+            ${lib.concatMapStringsSep "\n" deleteRule pairs}
           '';
         };
       }
