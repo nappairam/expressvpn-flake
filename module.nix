@@ -13,6 +13,40 @@
 let
   cfg = config.services.expressvpn;
   installDir = "/opt/expressvpn";
+  # Daemon shells out to a fleet of POSIX utilities via `bash -c "..."`
+  # (iptables for the killswitch, ip for policy routing, awk/grep/sed for
+  # parsing output, procps for pgrep/killall, findutils/e2fsprogs for
+  # openvpn-updown.sh's xargs/lsattr). Merged into ONE buildEnv on purpose:
+  # the daemon relays its $PATH to openvpn-updown.sh as `--path` args
+  # chunked at 120 chars (OpenVPN's OPTION_PARM_SIZE workaround), and
+  # OpenVPN additionally truncates script argv at MAX_PARMS=16. A
+  # multi-directory PATH overflows that limit - the script loses `--dns`
+  # and gets a PATH cut mid-store-hash, the up script fails, and openvpn
+  # aborts every connection attempt ~2s in. One merged dir keeps the PATH
+  # at 2 entries -> 2 chunks -> the whole command fits.
+  daemonTools = pkgs.buildEnv {
+    name = "expressvpn-daemon-tools";
+    paths = [
+      pkgs.iptables
+      pkgs.iproute2
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.gnused
+      pkgs.coreutils
+      pkgs.findutils # xargs in openvpn-updown.sh
+      pkgs.e2fsprogs # lsattr in openvpn-updown.sh
+      pkgs.procps
+      pkgs.psmisc
+      pkgs.util-linux
+      pkgs.systemd # for `systemctl` invoked by openvpn-updown.sh
+    ];
+    pathsToLink = [
+      "/bin"
+      "/sbin"
+    ];
+    # kill/uptime/etc. exist in several of these; first match wins.
+    ignoreCollisions = true;
+  };
 in
 {
   # nixpkgs ships an older v3 CLI-only `services.expressvpn` module. This
@@ -195,23 +229,12 @@ in
       # Daemon binaries dlopen from /opt/expressvpn/lib via $ORIGIN/../lib RUNPATH already,
       # but upstream's unit sets LD_LIBRARY_PATH explicitly - mirror that for parity.
       environment.LD_LIBRARY_PATH = "${installDir}/lib";
-      # Daemon shells out to a fleet of POSIX utilities via `bash -c "..."`
-      # (iptables for the killswitch, ip for policy routing, awk/grep/sed
-      # for parsing output, procps for pgrep/killall). Each one missing from
-      # the unit's PATH manifests as a cryptic "command not found" warning
-      # and a half-applied firewall.
-      path = [
-        pkgs.iptables
-        pkgs.iproute2
-        pkgs.gawk
-        pkgs.gnugrep
-        pkgs.gnused
-        pkgs.coreutils
-        pkgs.procps
-        pkgs.psmisc
-        pkgs.util-linux
-        pkgs.systemd # for `systemctl` invoked by openvpn-updown.sh
-      ];
+      # NOT `path = [ daemonTools ]`: NixOS appends five default packages to
+      # every service path (coreutils/findutils/grep/sed/systemd), which
+      # pushes the PATH back over OpenVPN's MAX_PARMS budget - see the
+      # daemonTools comment. Setting environment.PATH directly keeps it at
+      # exactly two entries.
+      environment.PATH = lib.mkForce "${daemonTools}/bin:${daemonTools}/sbin";
       serviceConfig = {
         ExecStart = "${installDir}/bin/expressvpn-daemon";
         Restart = "always";
