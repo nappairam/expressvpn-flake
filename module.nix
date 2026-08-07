@@ -47,6 +47,23 @@ let
     # kill/uptime/etc. exist in several of these; first match wins.
     ignoreCollisions = true;
   };
+  # The daemon's exec.cpp spawns `/bin/bash -c "..."` with a stripped
+  # environment (unlike newexec.cpp, which passes PATH). Upstream Ubuntu
+  # survives because bash's compiled-in fallback PATH finds /usr/bin;
+  # nixpkgs bash falls back to PATH=/no-such-path, so every such helper
+  # exits 127. WireGuard configures its tunnel IP through exec.cpp
+  # (`ip addr add ... dev wgexpressvpn0`), so without this shim the
+  # interface never comes up. Only defaults PATH when unset - callers
+  # that provide one keep theirs.
+  # Append rather than replace-when-unset: exec.cpp hardcodes
+  # PATH=/usr/bin:/bin:/usr/local/bin (verified via strace), so the PATH is
+  # never actually empty - it just points at directories NixOS doesn't
+  # have. Appending keeps any caller-provided entries at higher priority.
+  bashWithDefaultPath = pkgs.writeScript "bash-with-default-path" ''
+    #!${pkgs.bash}/bin/bash
+    export PATH="''${PATH:+$PATH:}${daemonTools}/bin:${daemonTools}/sbin"
+    exec ${pkgs.bash}/bin/bash "$@"
+  '';
 in
 {
   # nixpkgs ships an older v3 CLI-only `services.expressvpn` module. This
@@ -182,10 +199,11 @@ in
       # actual mount; tmpfiles just ensures the parent dir exists.
       "d  ${installDir}/etc/cgroup           0755 root root - -"
       "d  ${installDir}/etc/cgroup/net_cls   0755 root root - -"
-      # Daemon invokes helper commands via `/bin/bash -c "..."` (newexec.cpp);
-      # NixOS only ships `/bin/sh`, so without this symlink every iptables/ip
-      # rule application aborts with "code: 2 No such file or directory".
-      "L+ /bin/bash             -    -    -         - ${pkgs.bash}/bin/bash"
+      # Daemon invokes helper commands via `/bin/bash -c "..."`; NixOS only
+      # ships `/bin/sh`, so without this every iptables/ip rule application
+      # aborts with "code: 2 No such file or directory". Points at a shim
+      # (not bare bash) - see bashWithDefaultPath above.
+      "L+ /bin/bash             -    -    -         - ${bashWithDefaultPath}"
     ];
 
     # Split tunneling needs the legacy cgroup-v1 `net_cls` controller. NixOS
