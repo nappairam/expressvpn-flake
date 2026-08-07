@@ -205,18 +205,24 @@ stdenvNoCC.mkDerivation {
     cat > $out/bin/expressvpn-client <<'EOF'
     #!${bash}/bin/bash
     # The bundle ships Qt6's platform plugin for Wayland but not the
-    # `wayland-graphics-integration-client` plugin dir, so Qt fails to load the
-    # `wayland-egl` client buffer integration and aborts when QtQuick tries to
-    # create a GLES2 context. Force Qt Quick's software scenegraph as a
-    # workaround until upstream ships those plugins.
-    : "''${QT_QUICK_BACKEND:=software}"
-    export QT_QUICK_BACKEND
+    # `wayland-graphics-integration-client` plugin dir, so under
+    # `-platform wayland` Qt can't load the `wayland-egl` client buffer
+    # integration and Qt Quick must fall back to the software scenegraph -
+    # which cannot render the shader-effect world map on the dashboard.
+    # Under xcb the bundled xcbglintegrations plugin provides a real
+    # GLX/OpenGL context, so prefer XWayland whenever a DISPLAY exists and
+    # only use wayland + software rendering as a last resort.
     PLAT_ARGS=()
     if ! printf '%s\n' "$@" | grep -qx '\-platform'; then
-      case "$XDG_SESSION_TYPE" in
-        wayland) PLAT_ARGS=(-platform wayland) ;;
-        x11|tty|"") PLAT_ARGS=(-platform xcb) ;;
-      esac
+      if [ -n "$DISPLAY" ]; then
+        PLAT_ARGS=(-platform xcb)
+      elif [ "$XDG_SESSION_TYPE" = wayland ]; then
+        PLAT_ARGS=(-platform wayland)
+        : "''${QT_QUICK_BACKEND:=software}"
+        export QT_QUICK_BACKEND
+      else
+        PLAT_ARGS=(-platform xcb)
+      fi
     fi
     exec @out@/expressvpn/bin/expressvpn-client "''${PLAT_ARGS[@]}" "$@"
     EOF
