@@ -56,6 +56,25 @@ After switch:
 
 Also disables nixpkgs's stale `services.expressvpn` module (v3 CLI) so the namespace is owned by this flake.
 
+### `allowDNS`
+
+Network Lock permits port 53 only to the resolver the daemon pushes, so a
+resolver reachable outside the tunnel stops answering while connected -
+Tailscale's MagicDNS at `100.100.100.100`, or a corporate resolver on a subnet
+you already bypass. The daemon's own bypass-subnet setting cannot fix it: its
+`allowSubnets` anchor is priority 305 and `blockDNS` is 310, so the reject
+happens first and port 53 stays broken while every other protocol works.
+
+```nix
+services.expressvpn.allowDNS = [ "100.100.100.100" ];
+```
+
+Adds `systemd.services.expressvpn-allow-dns`, which marks those queries with
+`0x3213` - the mark the daemon already accepts for its own traffic at
+`allowVpnFwmark` (priority 390) - so they clear the kill switch before
+`blockDNS` sees them. IPv4 and IPv6 entries are both accepted; the family is
+detected per entry.
+
 ## Why so many workarounds?
 
 The upstream `.run` is a Makeself archive that drops binaries with hardcoded

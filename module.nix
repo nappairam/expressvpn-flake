@@ -64,6 +64,28 @@ let
     export PATH="''${PATH:+$PATH:}${daemonTools}/bin:${daemonTools}/sbin"
     exec ${pkgs.bash}/bin/bash "$@"
   '';
+
+  # The daemon accepts its own traffic at the allowVpnFwmark anchor
+  # (priority 390) on this mark, well ahead of blockDNS at 310. Borrowing it
+  # is what lets an allowlisted resolver through; nothing else in the
+  # daemon's OUTPUT chain runs early enough.
+  allowDnsMark = "0x3213";
+  # Mark rather than accept, because the verdict has to come from a chain
+  # the daemon owns - anything we append to the filter chain ourselves is
+  # either rebuilt on the next applyRules() or ordered behind the reject.
+  dnsMarkRule =
+    addr: proto:
+    let
+      ipt = if lib.hasInfix ":" addr then "ip6tables" else "iptables";
+    in
+    {
+      cmd = "${pkgs.iptables}/bin/${ipt} -w -t mangle";
+      spec = "OUTPUT -d ${addr} -p ${proto} --dport 53 -j MARK --set-mark ${allowDnsMark}";
+    };
+  dnsMarkRules = lib.concatMap (addr: map (dnsMarkRule addr) [
+    "udp"
+    "tcp"
+  ]) cfg.allowDNS;
 in
 {
   # nixpkgs ships an older v3 CLI-only `services.expressvpn` module. This
@@ -92,6 +114,27 @@ in
         membership.
       '';
     };
+
+    allowDNS = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "100.100.100.100" ];
+      description = ''
+        Resolvers whose queries should survive Network Lock's DNS blocker.
+
+        Network Lock permits port 53 only to the resolver the daemon pushes,
+        so a resolver reachable outside the tunnel - Tailscale's MagicDNS, a
+        corporate resolver on a bypassed subnet - stops answering while
+        connected. Listing it here marks its queries with the mark the
+        daemon already accepts for its own traffic, which is evaluated
+        before the DNS reject.
+
+        Note the daemon's own bypass-subnet setting cannot do this: it is
+        consulted *after* the reject, so it restores every protocol except
+        port 53. Addresses may be IPv4 or IPv6; the family is detected per
+        entry.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -113,6 +156,31 @@ in
     # *some* route back to the source, the standard setting for
     # policy-routed VPNs.
     networking.firewall.checkReversePath = lib.mkDefault "loose";
+
+    # Appending to mangle OUTPUT is deliberate. iptables creates the builtin
+    # chain on demand if nothing has yet, the daemon's own chain there only
+    # sets marks and returns, and its mustBeFirst repositioning removes just
+    # its own duplicate jumps - so a rule appended after it survives both the
+    # daemon's rule rebuilds and its restarts.
+    systemd.services.expressvpn-allow-dns = lib.mkIf (cfg.allowDNS != [ ]) {
+      description = "Mark DNS to allowlisted resolvers so Network Lock permits it";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "expressvpn.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "expressvpn-allow-dns-add" (
+          lib.concatMapStringsSep "\n" (rule: ''
+            ${rule.cmd} -C ${rule.spec} 2> /dev/null || ${rule.cmd} -A ${rule.spec}
+          '') dnsMarkRules
+        );
+        ExecStop = pkgs.writeShellScript "expressvpn-allow-dns-del" (
+          lib.concatMapStringsSep "\n" (rule: ''
+            ${rule.cmd} -D ${rule.spec} 2> /dev/null || true
+          '') dnsMarkRules
+        );
+      };
+    };
 
     users.groups.expressvpn = { };
     users.groups.expressvpnhnsd = { };
