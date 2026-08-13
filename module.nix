@@ -69,7 +69,7 @@ let
   # (priority 390) on this mark, well ahead of blockDNS at 310. Borrowing it
   # is what lets an allowlisted resolver through; nothing else in the
   # daemon's OUTPUT chain runs early enough.
-  allowDnsMark = "0x3213";
+  vpnFwmark = "0x3213";
   # Mark rather than accept, because the verdict has to come from a chain
   # the daemon owns - anything we append to the filter chain ourselves is
   # either rebuilt on the next applyRules() or ordered behind the reject.
@@ -80,7 +80,7 @@ let
     in
     {
       cmd = "${pkgs.iptables}/bin/${ipt} -w -t mangle";
-      spec = "OUTPUT -d ${addr} -p ${proto} --dport 53 -j MARK --set-mark ${allowDnsMark}";
+      spec = "OUTPUT -d ${addr} -p ${proto} --dport 53 -j MARK --set-mark ${vpnFwmark}";
     };
   dnsMarkRules = lib.concatMap (addr: map (dnsMarkRule addr) [
     "udp"
@@ -135,6 +135,40 @@ in
         entry.
       '';
     };
+
+    allowInterfaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "gpd0" ];
+      description = ''
+        Interfaces whose outbound traffic should survive Network Lock.
+
+        Anything the routing layer already sends out these interfaces is
+        granted the daemon's own fwmark, so blockAll cannot reject it. Use
+        this for a coexisting split-tunnel VPN whose destinations are
+        dynamic (CDN addresses resolved from wildcard domains): the
+        interface is the one match that never goes stale - whatever routes
+        there is exactly the set that must pass, and when the interface is
+        gone nothing matches, so there is no stale-entry hole through the
+        kill switch. Requires networking.nftables.enable.
+      '';
+    };
+
+    allowHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "115.42.141.154" ];
+      description = ''
+        Addresses reachable on every port despite Network Lock.
+
+        For fixed infrastructure that must stay reachable outside the
+        tunnel - typically another VPN's gateway endpoint, whose transport
+        would otherwise be rejected once it is routed via the physical
+        uplink. Prefer allowDNS for resolvers and allowInterfaces for
+        dynamic destination sets; this is the blunt instrument. Addresses
+        may be IPv4 or IPv6. Requires networking.nftables.enable.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -181,6 +215,35 @@ in
         );
       };
     };
+
+    assertions = [
+      {
+        assertion = (cfg.allowInterfaces == [ ] && cfg.allowHosts == [ ]) || config.networking.nftables.enable;
+        message = "services.expressvpn.allowInterfaces/allowHosts need networking.nftables.enable.";
+      }
+    ];
+
+    # Our own inet table: native nft in a private table is invisible to
+    # iptables-nft, so unlike rules in builtin chains it cannot poison the
+    # daemon's chain listing. One step after mangle so these marks
+    # deterministically run after (and can overwrite) the daemon's own
+    # subnet tags; type route so a mark change re-routes.
+    networking.nftables.tables.expressvpn-exempt =
+      lib.mkIf (cfg.allowInterfaces != [ ] || cfg.allowHosts != [ ])
+        {
+          family = "inet";
+          content = ''
+            chain output {
+              type route hook output priority mangle + 1; policy accept;
+              ${lib.concatMapStringsSep "\n  " (
+                iface: ''oifname "${iface}" counter meta mark set ${vpnFwmark}''
+              ) cfg.allowInterfaces}
+              ${lib.concatMapStringsSep "\n  " (
+                host: "${if lib.hasInfix ":" host then "ip6" else "ip"} daddr ${host} counter meta mark set ${vpnFwmark}"
+              ) cfg.allowHosts}
+            }
+          '';
+        };
 
     users.groups.expressvpn = { };
     users.groups.expressvpnhnsd = { };

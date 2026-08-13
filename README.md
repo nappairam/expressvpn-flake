@@ -75,6 +75,26 @@ Adds `systemd.services.expressvpn-allow-dns`, which marks those queries with
 `blockDNS` sees them. IPv4 and IPv6 entries are both accepted; the family is
 detected per entry.
 
+### `allowInterfaces` / `allowHosts`
+
+Same mark, two more shapes (both need `networking.nftables.enable`):
+
+```nix
+services.expressvpn.allowInterfaces = [ "gpd0" ];      # split-tunnel VPN iface
+services.expressvpn.allowHosts = [ "115.42.141.154" ]; # its gateway endpoint
+```
+
+`allowInterfaces` exempts whatever the routing layer already sends out the
+named interfaces - the right tool for a coexisting split-tunnel VPN whose
+destinations are dynamic (CDN `/32`s resolved from wildcard domains): the
+interface never goes stale, and when it is gone nothing matches, so there is
+no stale-entry hole through the kill switch. `allowHosts` exempts every port
+to fixed addresses, typically the other VPN's gateway so its transport
+survives outside the tunnel. Implemented as one nft chain in a private inet
+table at priority `mangle + 1` - after the daemon's own subnet tags (the
+marks overwrite deterministically), invisible to iptables-nft, and never
+touched by the daemon's chain management.
+
 ## Why so many workarounds?
 
 The upstream `.run` is a Makeself archive that drops binaries with hardcoded
