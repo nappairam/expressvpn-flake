@@ -92,13 +92,6 @@ in
         membership.
       '';
     };
-
-    tailscaleBypass.enable = lib.mkEnableOption ''
-      a systemd unit that pokes a hole in tailscale's `ts-input` chain so
-      ExpressVPN's tunnel IPs (100.64.100.1, 100.64.100.5) survive the
-      CGNAT anti-spoof DROP. Only relevant when tailscale is also active
-      on this host
-    '';
   };
 
   config = lib.mkIf cfg.enable {
@@ -120,79 +113,6 @@ in
     # *some* route back to the source, the standard setting for
     # policy-routed VPNs.
     networking.firewall.checkReversePath = lib.mkDefault "loose";
-
-    # Tailscale's `ts-input` chain drops every packet sourced from
-    # 100.64.0.0/10 that arrives on a non-tailscale0 interface (anti-CGNAT-
-    # spoof guard). ExpressVPN's tun0 hands out 100.64.100.0/24, so DNS
-    # replies (src=100.64.100.1) and tunnel control traffic from the peer
-    # (src=100.64.100.5) get dropped → "no DNS", "no internet" while
-    # connected. External-IP traffic (src=104.x etc.) is unaffected.
-    # Tailscale rebuilds ts-input from scratch on every restart or
-    # `tailscale set`, so bind this unit to tailscaled via PartOf so it
-    # re-runs on every tailscaled restart.
-    systemd.services.expressvpn-tailscale-bypass = lib.mkIf cfg.tailscaleBypass.enable (
-      let
-        ipts = "${pkgs.iptables}/bin/iptables";
-        # VPN-internal IPs that tailscale's CGNAT guard would otherwise
-        # drop. .1 is the daemon-pushed DNS server, .5 is the tunnel peer.
-        allowSrcs = [
-          "100.64.100.1"
-          "100.64.100.5"
-          "100.64.0.1"
-          "100.64.0.5"
-        ];
-        # tun0 = OpenVPN/Lightway, wgexpressvpn0 = WireGuard. DNS replies
-        # (src 100.64.100.1) arrive on whichever tunnel is active.
-        vpnIfaces = [
-          "tun0"
-          "wgexpressvpn0"
-        ];
-        pairs = lib.cartesianProduct {
-          src = allowSrcs;
-          iface = vpnIfaces;
-        };
-        insertRule =
-          { src, iface }:
-          ''
-            ${ipts} -C ts-input -s ${src} -i ${iface} -j RETURN 2>/dev/null \
-              || ${ipts} -I ts-input 1 -s ${src} -i ${iface} -j RETURN
-          '';
-        deleteRule =
-          { src, iface }:
-          ''
-            ${ipts} -D ts-input -s ${src} -i ${iface} -j RETURN 2>/dev/null || true
-          '';
-      in
-      {
-        description = "Re-insert tailscale ts-input bypass for ExpressVPN tunnel IPs";
-        wantedBy = [
-          "tailscaled.service"
-          "expressvpn.service"
-        ];
-        after = [
-          "tailscaled.service"
-          "expressvpn.service"
-        ];
-        partOf = [ "tailscaled.service" ];
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-          ExecStart = pkgs.writeShellScript "expressvpn-tailscale-bypass" ''
-            set -eu
-            # tailscaled creates ts-input asynchronously after the unit
-            # reports ready, so wait for the chain to exist before inserting.
-            for _ in $(seq 1 30); do
-              ${ipts} -S ts-input >/dev/null 2>&1 && break
-              sleep 1
-            done
-            ${lib.concatMapStringsSep "\n" insertRule pairs}
-          '';
-          ExecStop = pkgs.writeShellScript "expressvpn-tailscale-bypass-stop" ''
-            ${lib.concatMapStringsSep "\n" deleteRule pairs}
-          '';
-        };
-      }
-    );
 
     users.groups.expressvpn = { };
     users.groups.expressvpnhnsd = { };

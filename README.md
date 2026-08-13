@@ -2,7 +2,7 @@
 
 ExpressVPN v14.x (Qt-based App) packaged for NixOS - daemon + CLI (`expressvpnctl`) + GUI client (`expressvpn-client`).
 
-Built from the upstream universal `.run` installer (auto-extracted via `autoPatchelfHook`). Includes a NixOS module that wires `/opt/expressvpn` via `systemd-tmpfiles`, sets up the daemon service, and provides an optional bypass for tailscale's CGNAT anti-spoof drop.
+Built from the upstream universal `.run` installer (auto-extracted via `autoPatchelfHook`). Includes a NixOS module that wires `/opt/expressvpn` via `systemd-tmpfiles` and sets up the daemon service.
 
 ## Status
 
@@ -28,8 +28,6 @@ Built from the upstream universal `.run` installer (auto-extracted via `autoPatc
           services.expressvpn = {
             enable = true;
             users = [ "alice" ];
-            # Only if you also run tailscale and hit the CGNAT drop
-            tailscaleBypass.enable = true;
           };
         }
       ];
@@ -53,7 +51,6 @@ After switch:
 - Two groups: `expressvpn`, `expressvpnhnsd`
 - `systemd-tmpfiles` rules creating `/opt/expressvpn/{bin,lib,plugins,qml,share}` as symlinks into the nix store + writable `etc/`, `var/` owned by group `expressvpn`
 - `systemd.services.expressvpn` - daemon (`expressvpn-daemon`) with `LD_LIBRARY_PATH` + helper PATH (iptables, ip, awk, etc.) baked in
-- Optional `systemd.services.expressvpn-tailscale-bypass` - see above
 - `environment.etc."NetworkManager/conf.d/wgexpressvpn.conf"` - keep NM off `wgexpressvpn*`
 - `/bin/bash` symlink - daemon shells helpers via hardcoded `/bin/bash -c`
 
